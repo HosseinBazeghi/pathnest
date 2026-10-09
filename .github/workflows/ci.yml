@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: sudo apt-get update && sudo apt-get install -y zsh
+      - run: pip install -e . pytest
+      - run: bash -n build.sh shell/pn.sh && zsh -n shell/pn.sh
+      - run: pytest -q
+
+  build:
+    name: Build binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install textual pyinstaller
+      - run: python -m PyInstaller --noconfirm --clean --onefile --collect-all textual --name pn-bin entry.py
+      - run: ./dist/pn-bin --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pn-bin-linux
+          path: dist/pn-bin
