@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y zsh
+      - run: pip install -e '.[dev]'
+      - name: Verify tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python -c 'import os, pathnest; assert os.environ["RELEASE_TAG"] == "v" + pathnest.__version__'
+      - run: bash -n build.sh install.sh shell/pn.sh scripts/package-release.sh && zsh -n shell/pn.sh
+      - run: pytest -q
+      - run: python -m PyInstaller --noconfirm --clean --onefile --collect-all textual --name pn-bin entry.py
+      - run: ./dist/pn-bin --version
+      - run: bash scripts/package-release.sh
+      - name: Smoke test packaged installation
+        run: |
+          stage=$(mktemp -d)
+          tar -xzf dist/pathnest-linux-x86_64.tar.gz -C "$stage"
+          HOME="$stage/home" XDG_DATA_HOME="$stage/data" SHELL=/bin/bash bash "$stage/pathnest-linux-x86_64/install.sh"
+          HOME="$stage/home" PATH="$stage/home/.local/bin:$PATH" bash -c '. "$1"; pn add "$2"; pn go pathnest-linux-x86_64; test "$PWD" = "$2"' test "$stage/data/pathnest/pn.sh" "$stage/pathnest-linux-x86_64"
+      - name: Publish release bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/pathnest-linux-x86_64.tar.gz dist/pathnest-linux-x86_64.tar.gz.sha256 --verify-tag --generate-notes --title "PathNest $RELEASE_TAG"

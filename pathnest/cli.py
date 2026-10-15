@@ -6,7 +6,6 @@ subcommands manage groups and bookmarks non-interactively.
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 from typing import Sequence
@@ -15,6 +14,8 @@ from . import __version__
 
 
 def build_parser() -> argparse.ArgumentParser:
+    import argparse
+
     # Shared option so --config works both before and after the subcommand
     # (SUPPRESS keeps the subparser from clobbering a global value).
     common = argparse.ArgumentParser(add_help=False)
@@ -46,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("-n", "--name", metavar="NAME", help="bookmark name (default: directory name)")
 
     p_go = sub.add_parser("go", parents=[common], help="jump to a bookmark by (partial) name")
+    p_go.add_argument("-g", "--group", help="limit matches to this group")
     p_go.add_argument("name", metavar="NAME", help="bookmark name; a partial name offers close matches")
 
     p_rm = sub.add_parser("remove", parents=[common], help="remove a bookmark (never deletes any files)")
@@ -70,6 +72,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_list = sub.add_parser("list", parents=[common], help="list groups and bookmarks")
     p_list.add_argument("group", nargs="?", metavar="GROUP", help="show only this group")
 
+    p_scan = sub.add_parser("scan", parents=[common], help="preview and bookmark immediate subdirectories")
+    p_scan.add_argument("path", nargs="?", default=".")
+    p_scan.add_argument("-g", "--group", default="Default")
+    p_scan.add_argument("-y", "--yes", action="store_true", help="add all previewed directories")
+
+    p_update = sub.add_parser("update", parents=[common], help="install the latest stable GitHub release")
+    p_update.add_argument("--check", action="store_true", help="check for a new release without installing")
+
+    # Shell adapters pass complete command words after --, including the current prefix.
+    p_complete = sub.add_parser("_complete", parents=[common])
+    p_complete.add_argument("words", nargs=argparse.REMAINDER)
     return parser
 
 
@@ -162,25 +175,32 @@ def _jump(path: str) -> int:
 
 
 def cmd_go(store, args: argparse.Namespace) -> int:
-    import difflib
-
     name = args.name.strip()
-    entries = [(g["name"], bm) for g in store.groups for bm in g["bookmarks"]]
+    groups = store.groups
+    if args.group is not None:
+        groups = [{"name": args.group, "bookmarks": store.bookmarks(args.group)}]
+    by_name = {}
+    for group in groups:
+        for bookmark in group["bookmarks"]:
+            by_name.setdefault(bookmark["name"], []).append((group["name"], bookmark))
 
-    exact = [(g, bm) for g, bm in entries if bm["name"] == name]
+    exact = by_name.get(name, [])
     if len(exact) == 1:
         return _jump(exact[0][1]["path"])
     if len(exact) > 1:
         print(f'pn: "{name}" exists in more than one group:', file=sys.stderr)
         for g, bm in exact:
             print(f"  {g}: {bm['path']}", file=sys.stderr)
+        print("Use pn go NAME --group GROUP to choose one.", file=sys.stderr)
         return 1
 
-    close = difflib.get_close_matches(name, {bm["name"] for _, bm in entries}, n=3, cutoff=0.6)
+    import difflib
+
+    close = difflib.get_close_matches(name, sorted(by_name), n=3, cutoff=0.6)
     if not close:
         print(f'pn: no bookmark matching "{name}"', file=sys.stderr)
         return 1
-    candidates = [(g, bm) for g, bm in entries if bm["name"] == close[0]]
+    candidates = by_name[close[0]]
     if len(close) == 1 and len(candidates) == 1:
         if not sys.stdin.isatty():
             print(f'pn: not a terminal; use the exact name "{close[0]}"', file=sys.stderr)
@@ -196,9 +216,8 @@ def cmd_go(store, args: argparse.Namespace) -> int:
 
     print("pn: no exact match. Did you mean:", file=sys.stderr)
     for close_name in close:
-        for g, bm in entries:
-            if bm["name"] == close_name:
-                print(f"  {bm['name']}  ({g}): {bm['path']}", file=sys.stderr)
+        for g, bm in by_name[close_name]:
+            print(f"  {bm['name']}  ({g}): {bm['path']}", file=sys.stderr)
     return 1
 
 
@@ -260,18 +279,88 @@ def cmd_list(store, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scan(store, args: argparse.Namespace) -> int:
+    from .storage import normalize_path
+
+    root = normalize_path(args.path)
+    existing = next((g["bookmarks"] for g in store.groups if g["name"] == args.group.strip()), [])
+    names = {bm["name"] for bm in existing}
+    paths = {bm["path"] for bm in existing}
+    with os.scandir(root) as children:
+        discovered = sorted(
+            ((entry.name, entry.path) for entry in children
+             if not entry.name.startswith(".") and entry.name.strip() not in names
+             and entry.path not in paths and entry.is_dir()),
+            key=lambda item: (item[0].strip().casefold(), item[0] != item[0].strip(), item[0]),
+        )
+    candidates = []
+    skipped = 0
+    for name, path in discovered:
+        normalized = name.strip()
+        if not normalized or normalized in names:
+            skipped += 1
+            continue
+        names.add(normalized)
+        candidates.append((name, path))
+    if skipped:
+        print(f"Skipped {skipped} directories with empty or duplicate bookmark names.")
+    if not candidates:
+        print("No new directories to bookmark (hidden directories are skipped).")
+        return 0
+    for index, (name, path) in enumerate(candidates, 1):
+        print(f"  {index}. {name!r} -> {path!r}")
+    if args.yes:
+        selected = candidates
+    else:
+        if not sys.stdin.isatty():
+            print("pn: preview only; pass --yes to add all directories", file=sys.stderr)
+            return 1
+        try:
+            answer = input("Select numbers separated by spaces, 'all', or Enter to cancel: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return 1
+        if not answer:
+            return 0
+        if answer.lower() == "all":
+            selected = candidates
+        else:
+            try:
+                indexes = {int(token) for token in answer.split()}
+                if not indexes or min(indexes) < 1 or max(indexes) > len(candidates):
+                    raise ValueError
+            except ValueError:
+                print("pn: enter valid numbers from the preview; nothing was added", file=sys.stderr)
+                return 1
+            selected = [entry for index, entry in enumerate(candidates, 1) if index in indexes]
+    count = store.add_bookmarks(args.group, selected)
+    print(f'Added {count} bookmarks to "{args.group.strip()}"')
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv == ["--version"]:
+        print(f"pathnest {__version__}")
+        return 0
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "update":
+        from .update import run_update
+        return run_update(check=args.check)
 
     from .config import ConfigError, resolve_config_path
-    from .storage import StorageError, Store
 
     try:
         config_path = resolve_config_path(args.config)
     except (ConfigError, OSError) as exc:
         print(f"pn: {exc}", file=sys.stderr)
         return 2
+
+    if args.command == "_complete":
+        from .completion import complete
+        return complete(config_path, args.words)
+
+    from .storage import StorageError, Store
 
     try:
         store = Store(config_path)
@@ -287,6 +376,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "remove": cmd_remove,
         "group": cmd_group,
         "list": cmd_list,
+        "scan": cmd_scan,
     }
     try:
         if args.command is None:

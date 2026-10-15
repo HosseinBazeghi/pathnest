@@ -2,15 +2,44 @@
 
 ![CI](https://github.com/HosseinBazeghi/pathnest/actions/workflows/ci.yml/badge.svg)
 
+**Your projects, grouped and one Enter away.**
+
 Stop typing long `cd` commands. Save your project directories in groups, pick one, press Enter. Your terminal is now there.
 
 ![PathNest](docs/demo.gif)
 
 - **Two-panel TUI**: groups on the left, bookmarks on the right, keyboard only.
+- **Global search**: press `/`, search names, groups and paths, then Enter to jump.
+- **Quick setup**: save your first directory in one form, or scan a projects folder.
 - **Shell navigation**: Enter on a bookmark closes the TUI and `cd`s your current shell.
 - **One binary, one JSON file**: no runtime Python, no database, no background service.
 
 ## Install
+
+### Download a release
+
+Download `pathnest-linux-x86_64.tar.gz` and its `.sha256` file from
+[Releases](https://github.com/HosseinBazeghi/pathnest/releases). Release bundles
+are produced when a version tag is pushed; if no bundle is available yet, use
+**Build from source** below.
+
+The prebuilt bundle targets **Linux x86_64 with glibc 2.35 or newer** (for example,
+Ubuntu 22.04+). Bash and Zsh are supported. It needs no Python installation.
+For other Linux architectures or older glibc, build on the target machine.
+
+```bash
+sha256sum -c pathnest-linux-x86_64.tar.gz.sha256
+tar -xzf pathnest-linux-x86_64.tar.gz
+cd pathnest-linux-x86_64
+./install.sh
+```
+
+The installer adds the binary to `~/.local/bin`, installs shell integration and
+completion, and appends a guarded source line to your Bash/Zsh configuration.
+Open a new terminal and run `pn`. If prompted, add `~/.local/bin` to your PATH.
+Zsh completion uses your existing `compinit` setup.
+
+### Build from source
 
 Linux with Python 3.9+ (Fedora: `sudo dnf install python3`). No root required.
 
@@ -26,6 +55,27 @@ cd pathnest
 pn
 ```
 
+### Updates
+
+```bash
+pn update --check
+pn update
+```
+
+`pn update` downloads the latest **published stable release** from this project's
+GitHub Releases page. It verifies the archive's SHA-256 checksum and runs the new
+binary's version check before replacing the installed binary and shell wrapper.
+Bookmarks and shell configuration files are untouched. Open a new terminal after
+updating to load the new wrapper and completion functions.
+
+Automatic installation supports standalone installations in `~/.local/bin` on
+Linux x86_64 with glibc 2.35+. Source/virtual-environment installations can check
+for releases with `--check`; use the source build route to update those. An
+unpublished commit or tag is not an update: the release must include the binary
+archive and checksum. Network failures, missing release assets, or incompatible
+binaries leave the current installation in place. Concurrent updates are rejected.
+
+
 ## Keys
 
 | Key | Action |
@@ -33,11 +83,22 @@ pn
 | `↑` `↓` | Move selection |
 | `Tab` | Switch panel |
 | `Enter` | Open group (left) / `cd` to directory (right) |
-| `a` | Add group or bookmark |
+| `/` | Search all groups; Escape returns to the previous view |
+| `a` | Add group or bookmark (first run: save this directory) |
 | `e` | Edit selection |
 | `d` | Remove selection |
 | `?` | Help |
 | `q` | Quit, directory unchanged |
+
+On first run, press Enter on **Save this directory**. Its name and path are
+prefilled, and the `Default` group is created only when you save.
+
+Search is case-insensitive and matches all typed words across names, groups and
+paths. Use Up/Down to select and Enter to jump. Results are capped at 100 visible
+rows; keep typing to narrow them down. Search does not scan your disk.
+
+Unavailable paths are marked in the group view. Select one and press `e` to
+repair its path. Bookmarks on disconnected drives are retained.
 
 New bookmarks default to the current directory. Paths are validated, `~` is expanded, and names, groups, and paths are all yours to set.
 
@@ -48,11 +109,26 @@ Everything also works without the TUI:
 ```bash
 pn add                                  # bookmark the current directory
 pn add --group Research --name Thesis ~/university/thesis
+pn go thesis --group Research           # choose a bookmark in a specific group
 pn go thesis                            # jump straight there, no TUI (fuzzy: "pn go thesi" asks)
 pn group add Research
 pn group rename Research Science        # bookmarks are kept
 pn list
+pn update                               # install the latest stable GitHub release
+pn update --check                       # check without changing the installation
+pn scan ~/Projects --group Work          # preview immediate, non-hidden subdirectories
+pn scan ~/Projects --group Work --yes    # add all candidates without a prompt
 ```
+
+Scanning skips names and paths already saved in the destination group, plus
+empty or duplicate names after trimming whitespace. At the
+preview, enter numbers separated by spaces, `all`, or Enter to cancel. It never
+recurses or modifies project directories; selected bookmarks are saved together.
+In scripts, scanning requires `--yes` to make changes.
+
+Press Tab after `pn go` to complete saved names, or after `--group` to complete
+groups. Completion reads your configured database without changing it, including
+when `--config FILE` is present on the command line.
 
 ## Data
 
@@ -71,5 +147,14 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 pytest
 ```
+
+## Release maintenance
+
+Keep the versions in `pyproject.toml` and `pathnest/__init__.py` in sync. Pushing
+a matching `vX.Y.Z` tag runs tests, builds on Ubuntu 22.04, verifies an isolated
+installation, and publishes the archive and checksum. `build.sh` remains the
+local source-build route; `install.sh` is shared by both installation paths.
+`pn update` depends on the published archive name and its `.sha256` file; keep
+these assets together. No release is published merely by building locally.
 
 MIT license.

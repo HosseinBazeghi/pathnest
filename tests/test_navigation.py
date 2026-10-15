@@ -214,3 +214,18 @@ pn go Link || exit 1
 '''
     proc = subprocess.run([shell, '-c', script], env=env, capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize('shell', ['bash', 'zsh'])
+def test_management_commands_skip_tempfiles_and_pass_wrapper_path(shell_env, shell):
+    if not shutil.which(shell):
+        pytest.skip('shell unavailable')
+    env, start, _ = shell_env
+    body = '''
+mktemp() { return 99; }
+pn-bin() { test -z "$PATHNEST_RESULT_FILE" && test -f "$PATHNEST_SHELL_FILE"; }
+pn update --check
+'''
+    result = _run_wrapper(env, start, body, shell=shell)
+    assert 'RC:0' in result.stdout, result.stderr
+    assert f'CWD:{start}' in result.stdout

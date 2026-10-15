@@ -286,6 +286,32 @@ class Store:
         self.save()
         return entry
 
+    def add_bookmarks(self, group: str, entries: list[tuple[str, str]]) -> int:
+        """Validate a batch completely, then commit it with a single atomic save."""
+        group = group.strip()
+        if not group:
+            raise StorageError("group name must not be empty")
+        owner = self._find_group(group)
+        names = {bm["name"] for bm in owner["bookmarks"]} if owner else set()
+        pending = []
+        for name, raw_path in entries:
+            name = name.strip()
+            if not name or name in names:
+                raise StorageError(f'empty or duplicate bookmark name: "{name}"')
+            path = normalize_path(raw_path)
+            if not os.path.isdir(path):
+                raise StorageError(f"not an existing directory: {path}")
+            names.add(name)
+            pending.append({"name": name, "path": path})
+        if not pending:
+            return 0
+        if owner is None:
+            owner = {"name": group, "bookmarks": []}
+            self.groups.append(owner)
+        owner["bookmarks"].extend(pending)
+        self.save()
+        return len(pending)
+
     def update_bookmark(
         self,
         group: str,

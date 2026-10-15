@@ -113,33 +113,7 @@ run_py "$PY" -m PyInstaller \
 # ----------------------------------------------------------------------
 # 7. Install executable + shell integration
 # ----------------------------------------------------------------------
-say "Installing to $INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
-install -m 0755 "dist/$BIN_NAME" "$INSTALL_DIR/$BIN_NAME" || die "failed to install executable"
-
-say "Installing shell integration to $DATA_DIR"
-mkdir -p "$DATA_DIR"
-install -m 0644 shell/pn.sh "$DATA_DIR/pn.sh" || die "failed to install shell wrapper"
-
-integrate_rc() {
-    local rcfile="$1"
-    touch -- "$rcfile"  # create only when missing; never overwrites
-    if grep -q 'pathnest shell integration' "$rcfile" 2>/dev/null; then
-        say "Shell integration already present in $rcfile (no change)"
-    else
-        {
-            printf '\n# >>> pathnest shell integration >>>\n'
-            printf 'if [ -f %q ]; then\n  . %q\nfi\n' "$DATA_DIR/pn.sh" "$DATA_DIR/pn.sh"
-            printf '# <<< pathnest shell integration <<<\n'
-        } >> "$rcfile" || die "failed to update $rcfile"
-        say "Added shell integration to $rcfile"
-    fi
-}
-
-case "$(basename "${SHELL:-/bin/bash}")" in
-    zsh) integrate_rc "${ZDOTDIR:-$HOME}/.zshrc" ;;
-    *)   integrate_rc "$HOME/.bashrc" ;;
-esac
+bash "$SCRIPT_DIR/install.sh" "$SCRIPT_DIR/dist/$BIN_NAME"
 
 # ----------------------------------------------------------------------
 # 8. PATH check

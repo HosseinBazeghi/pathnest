@@ -19,12 +19,12 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: sudo apt-get update && sudo apt-get install -y zsh
       - run: pip install -e . pytest
-      - run: bash -n build.sh shell/pn.sh && zsh -n shell/pn.sh
+      - run: bash -n build.sh install.sh shell/pn.sh scripts/package-release.sh && zsh -n shell/pn.sh
       - run: pytest -q
 
   build:
     name: Build binary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,7 +33,10 @@ jobs:
       - run: pip install textual pyinstaller
       - run: python -m PyInstaller --noconfirm --clean --onefile --collect-all textual --name pn-bin entry.py
       - run: ./dist/pn-bin --version
+      - run: bash scripts/package-release.sh
       - uses: actions/upload-artifact@v4
         with:
           name: pn-bin-linux
-          path: dist/pn-bin
+          path: |
+            dist/pathnest-linux-x86_64.tar.gz
+            dist/pathnest-linux-x86_64.tar.gz.sha256

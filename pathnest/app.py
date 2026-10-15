@@ -7,11 +7,11 @@ directories themselves are never modified.
 from __future__ import annotations
 
 import os
-from typing import Callable
+from typing import Callable, Optional
 
 from rich.markup import escape
 from rich.text import Text
-from textual import on
+from textual import on, events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -177,6 +177,7 @@ class HelpScreen(ModalScreen[None]):
                 "  Tab        Switch panels\n"
                 "  Enter      Left panel: open group\n"
                 "             Right panel: cd into directory\n"
+                "  /          Search all groups\n"
                 "  a          Add group / bookmark\n"
                 "  e          Edit selected group / bookmark\n"
                 "  d          Remove selected group / bookmark\n"
@@ -188,6 +189,86 @@ class HelpScreen(ModalScreen[None]):
             yield Static("Press Esc or q to close", classes="dlg-hint")
 
     def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class SearchScreen(ModalScreen[Optional[str]]):
+    """Search a precomputed text index without filesystem work on keystrokes."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+    LIMIT = 100
+
+    def __init__(self, store: Store) -> None:
+        super().__init__()
+        self.entries = [(g["name"], bm["name"], bm["path"],
+                         "\n".join((g["name"], bm["name"], bm["path"])).casefold())
+                        for g in store.groups for bm in g["bookmarks"]]
+        self.matches = []
+        self._query_terms = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="search-dialog"):
+            yield Input(placeholder="Search all names, groups and paths…", id="search-query")
+            yield ListView(id="search-results")
+            yield Static("", id="search-count", markup=False)
+            yield Static("↑ ↓ select · Enter jump · Esc return", classes="dlg-hint")
+
+    async def on_mount(self) -> None:
+        await self._filter("")
+        self.query_one(Input).focus()
+
+    @on(Input.Changed, "#search-query")
+    async def _changed(self, event: Input.Changed) -> None:
+        await self._filter(event.value)
+
+    async def _filter(self, query: str) -> None:
+        terms = tuple(query.casefold().split())
+        if terms == self._query_terms:
+            return
+        self._query_terms = terms
+        matches = []
+        count = 0
+        for entry in self.entries:
+            if all(term in entry[3] for term in terms):
+                count += 1
+                if len(matches) < self.LIMIT:
+                    matches.append(entry)
+        unchanged = matches == self.matches
+        self.matches = matches
+        self.query_one("#search-count", Static).update(
+            f"{count} match{'es' if count != 1 else ''}"
+            + (f" · showing first {self.LIMIT}; keep typing" if count > self.LIMIT else "")
+        )
+        if unchanged:
+            return
+        results = self.query_one("#search-results", ListView)
+        await results.clear()
+        await results.extend(ListItem(Label(f"{name} · {group} · {path}", markup=False))
+                             for group, name, path, _ in self.matches)
+        results.index = 0 if self.matches else None
+
+    async def on_key(self, event: events.Key) -> None:
+        if isinstance(self.focused, Input) and event.key in ("up", "down"):
+            results = self.query_one("#search-results", ListView)
+            if self.matches:
+                step = 1 if event.key == "down" else -1
+                results.index = max(0, min((results.index or 0) + step, len(self.matches) - 1))
+            event.prevent_default()
+            event.stop()
+
+    @on(Input.Submitted, "#search-query")
+    @on(ListView.Selected, "#search-results")
+    def _choose(self) -> None:
+        index = self.query_one("#search-results", ListView).index
+        if index is None or index >= len(self.matches):
+            return
+        path = self.matches[index][2]
+        if not os.path.isdir(path):
+            self.notify("Directory unavailable. Return to its group and press e to edit the path.", severity="warning")
+            return
+        self.dismiss(path)
+
+    def action_cancel(self) -> None:
         self.dismiss(None)
 
 
@@ -226,10 +307,21 @@ class PathNestApp(App):
         overflow: hidden;
         text-overflow: ellipsis;
     }
-    InputScreen, BookmarkFormScreen, ConfirmScreen, HelpScreen {
+    InputScreen, BookmarkFormScreen, ConfirmScreen, HelpScreen, SearchScreen {
         align: center middle;
         background: black 45%;
     }
+    #search-dialog {
+        width: 90%;
+        height: 80%;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #search-results { height: 1fr; }
+    #welcome { height: auto; padding: 1 2; }
+    #save-current { margin: 0 2 1 2; width: auto; }
+    ListItem.unavailable .bm-path { color: $warning; }
     #dlg {
         width: 64;
         max-width: 90%;
@@ -268,6 +360,7 @@ class PathNestApp(App):
     """
 
     BINDINGS = [
+        Binding("slash", "search", "Search"),
         Binding("a", "add", "Add"),
         Binding("e", "edit", "Edit"),
         Binding("d", "remove", "Remove"),
@@ -285,6 +378,8 @@ class PathNestApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
+        yield Static("Your projects, grouped and one Enter away. Save this directory to get started.", id="welcome")
+        yield Button("Save this directory", id="save-current", variant="primary")
         with Horizontal(id="panels"):
             yield ListView(id="groups")
             yield ListView(id="bookmarks")
@@ -294,7 +389,10 @@ class PathNestApp(App):
         groups = self.query_one("#groups", ListView)
         groups.border_title = "GROUPS"
         await self.refresh_lists(select=0 if self.store.groups else None)
-        groups.focus()
+        if not any(g["bookmarks"] for g in self.store.groups):
+            self.query_one("#save-current", Button).focus()
+        else:
+            groups.focus()
 
     def _current_group(self) -> dict | None:
         if self.current_group is None or not self.store.groups:
@@ -311,6 +409,9 @@ class PathNestApp(App):
         return "bookmarks" if (self.focused is not None and self.focused.id == "bookmarks") else "groups"
 
     async def refresh_lists(self, select: int | None = None) -> None:
+        empty = not any(g["bookmarks"] for g in self.store.groups)
+        self.query_one("#welcome").display = empty
+        self.query_one("#save-current").display = empty
         groups_lv = self.query_one("#groups", ListView)
         bookmark_index = self.query_one("#bookmarks", ListView).index
         self._syncing = True
@@ -334,13 +435,15 @@ class PathNestApp(App):
         group = self._current_group()
         await bms_lv.clear()
         entries = group["bookmarks"] if group else []
-        await bms_lv.extend(
-            ListItem(
+        items = []
+        for bm in entries:
+            available = os.path.isdir(bm["path"])
+            items.append(ListItem(
                 Label(bm["name"], classes="bm-name", markup=False),
-                Label(bm["path"], classes="bm-path", markup=False),
-            )
-            for bm in entries
-        )
+                Label(bm["path"] + (" [unavailable]" if not available else ""), classes="bm-path", markup=False),
+                classes="" if available else "unavailable",
+            ))
+        await bms_lv.extend(items)
         bms_lv.border_title = f"BOOKMARKED DIRECTORIES ({len(entries)})"
         bms_lv.index = max(0, min(index or 0, len(entries) - 1)) if entries else None
 
@@ -376,12 +479,26 @@ class PathNestApp(App):
         self.exit()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        if action in {"add", "edit", "remove", "help", "quit"} and isinstance(self.screen, ModalScreen):
+        if action in {"add", "edit", "remove", "help", "quit", "search"} and isinstance(self.screen, ModalScreen):
             return False
         return True
 
+    def action_search(self) -> None:
+        self.push_screen(SearchScreen(self.store), self._search_selected)
+
+    def _search_selected(self, path: str | None) -> None:
+        if path is not None:
+            self.selected_path = path
+            self.exit()
+
+    @on(Button.Pressed, "#save-current")
+    def _save_current(self) -> None:
+        self.run_worker(self._add_bookmark(), exclusive=True)
+
     def action_add(self) -> None:
-        if self._panel() == "groups":
+        if not self.store.groups or (self.focused is not None and self.focused.id == "save-current"):
+            self.run_worker(self._add_bookmark(), exclusive=True)
+        elif self._panel() == "groups":
             self.run_worker(self._add_group(), exclusive=True)
         else:
             self.run_worker(self._add_bookmark(), exclusive=True)
@@ -408,20 +525,13 @@ class PathNestApp(App):
 
     async def _add_bookmark(self) -> None:
         try:
-            names = self.store.group_names()
-            if not names:
-                self.notify(
-                    "Add a group first: focus the left panel and press a.",
-                    title="No groups yet",
-                    severity="warning",
-                )
-                return
+            names = self.store.group_names() or ["Default"]
             cwd = os.getcwd()
 
             def validate(name: str, group: str, path: str) -> str | None:
                 if not name:
                     return "Name is required."
-                if any(bm["name"] == name for bm in self.store.bookmarks(group)):
+                if group in self.store.group_names() and any(bm["name"] == name for bm in self.store.bookmarks(group)):
                     return f'A bookmark named "{name}" already exists in {group}.'
                 normalized = normalize_path(path)
                 if not os.path.isdir(normalized):
@@ -442,8 +552,9 @@ class PathNestApp(App):
             if result is None:
                 return
             name, group, path = result
-            self.store.add_bookmark(group, name, path)
+            self.store.add_bookmark(group, name, path, create_group=True)
             await self.refresh_lists(select=self.store.group_names().index(group))
+            self.query_one("#bookmarks", ListView).focus()
         except (StorageError, OSError) as exc:
             await self.refresh_lists()
             self.notify(escape(str(exc)), title="Add failed", severity="error")
