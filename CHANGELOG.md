@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.0 — unreleased
+## 1.2.0 — 2026-10-15
 
 - Add `pn update` and `pn update --check` for stable GitHub releases, with SHA-256
   verification, compatibility checks, an update lock and rollback on failed replacement.
