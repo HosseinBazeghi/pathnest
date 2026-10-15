@@ -179,15 +179,19 @@ def test_invalid_version_rejected(version):
         update.version_tuple(version)
 
 
-@pytest.mark.parametrize('error,message', [
-    (HTTPError(update.LATEST_URL, 404, 'missing', {}, None), 'no published release'),
-    (HTTPError(update.LATEST_URL, 403, 'limited', {}, None), 'rate limit'),
-    (URLError('offline'), 'connection'),
+@pytest.mark.parametrize('status,message', [
+    pytest.param(404, 'no published release', id='not-found'),
+    pytest.param(403, 'rate limit', id='rate-limited'),
+    pytest.param(None, 'connection', id='offline'),
 ])
-def test_network_errors_are_actionable(tmp_path, monkeypatch, error, message):
+def test_network_errors_are_actionable(tmp_path, monkeypatch, status, message):
     class Opener:
         def open(self, *args, **kwargs):
-            raise error
+            # Construct exceptions at runtime: pytest introspects parameter
+            # objects during collection, which breaks HTTPError on Python 3.9.
+            if status is None:
+                raise URLError('offline')
+            raise HTTPError(update.LATEST_URL, status, 'request failed', {}, io.BytesIO())
     monkeypatch.setattr(update, 'build_opener', lambda *args: Opener())
     with pytest.raises(update.UpdateError, match=message):
         update._fetch(update.LATEST_URL, tmp_path / 'response', 100)
