@@ -60,8 +60,8 @@ pn
 ```bash
 pn update --check
 pn update
-pn update --version 1.3.0 --check
-pn update --version 1.3.0
+pn update --version 1.3.1 --check
+pn update --version 1.3.1
 ```
 
 `pn update` downloads the latest **published stable release** from this project's
@@ -150,7 +150,7 @@ pn list
 pn list Personal --json                  # structured output for scripts
 pn update                               # install the latest stable GitHub release
 pn update --check                       # check without changing the installation
-pn update --version 1.3.0                # choose a specific stable release
+pn update --version 1.3.1                # choose a specific stable release
 pn scan ~/Projects --group Work          # preview immediate, non-hidden subdirectories
 pn scan ~/Projects --group Work --yes    # add all candidates without a prompt
 ```
