@@ -9,7 +9,7 @@
 #   1. Detects the Linux environment (primarily Fedora).
 #   2. Checks for Python 3.
 #   3. Creates (and reuses) a build virtual environment.
-#   4. Installs build dependencies (textual, pyinstaller, pytest).
+#   4. Installs runtime and build dependencies from pyproject.toml.
 #   5. Runs the automated test suite.
 #   6. Builds a standalone `pn-bin` executable with PyInstaller.
 #   7. Installs it to ~/.local/bin and installs the shell wrapper.
@@ -83,13 +83,13 @@ run_py "$PY" -c 'import sys; sys.exit(0 if sys.prefix == sys.argv[1] else 1)' "$
 # ----------------------------------------------------------------------
 # 4. Build dependencies
 # ----------------------------------------------------------------------
-say "Installing build dependencies (textual, pyinstaller, pytest)"
+say "Installing runtime and build dependencies"
 if command -v uv >/dev/null 2>&1; then
-    uv pip install --python "$PY" 'textual>=1.0' 'pyinstaller>=6' 'pytest>=7' >/dev/null || die "dependency installation failed (uv)"
+    uv pip install --python "$PY" -e '.[dev]' >/dev/null || die "dependency installation failed (uv)"
 else
     run_py "$PY" -m pip --version >/dev/null 2>&1 \
         || die "pip unavailable in the venv (Fedora: sudo dnf install python3-pip, or install uv)"
-    run_py "$PY" -m pip install --quiet 'textual>=1.0' 'pyinstaller>=6' 'pytest>=7' \
+    run_py "$PY" -m pip install --quiet -e '.[dev]' \
         || die "dependency installation failed (pip)"
 fi
 
@@ -106,6 +106,7 @@ say "Building standalone executable with PyInstaller"
 run_py "$PY" -m PyInstaller \
     --noconfirm --clean --onefile \
     --collect-all textual \
+    --collect-data certifi \
     --name "$BIN_NAME" \
     entry.py || die "PyInstaller build failed"
 [ -x "dist/$BIN_NAME" ] || die "build finished but dist/$BIN_NAME is missing"

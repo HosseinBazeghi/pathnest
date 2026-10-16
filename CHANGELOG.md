@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.1 — 2026-10-16
+
+- Fix HTTPS updates in standalone Linux builds by discovering system CA bundles
+  and including Mozilla roots as a fallback when no CA file is available.
+- Respect explicit `SSL_CERT_FILE` and `SSL_CERT_DIR` settings, including company
+  proxy certificates, without disabling certificate or hostname verification.
+- Distinguish certificate verification and TLS errors from network failures.
+- Test packaged update checks in clean Ubuntu and Fedora containers before release.
+
 ## 1.3.0 — 2026-10-16
 
 - Jump with case-insensitive names and unique prefixes; prefer exact matches

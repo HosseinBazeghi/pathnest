@@ -25,8 +25,13 @@ jobs:
         run: python -c 'import os, pathnest; assert os.environ["RELEASE_TAG"] == "v" + pathnest.__version__'
       - run: bash -n build.sh install.sh shell/pn.sh scripts/package-release.sh && zsh -n shell/pn.sh
       - run: pytest -q
-      - run: python -m PyInstaller --noconfirm --clean --onefile --collect-all textual --name pn-bin entry.py
+      - run: python -m PyInstaller --noconfirm --clean --onefile --collect-all textual --collect-data certifi --name pn-bin entry.py
       - run: ./dist/pn-bin --version
+      - name: Check packaged HTTPS on Ubuntu and Fedora
+        run: |
+          for image in ubuntu:22.04 fedora:latest; do
+            docker run --rm -v "$PWD/dist/pn-bin:/pn-bin:ro" "$image" /pn-bin update --check
+          done
       - run: bash scripts/package-release.sh
       - name: Smoke test packaged installation
         run: |

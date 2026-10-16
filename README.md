@@ -84,6 +84,26 @@ unpublished commit or tag is not an update: the release must include the binary
 archive and checksum. Network failures, missing release assets, or incompatible
 binaries leave the current installation in place. Concurrent updates are rejected.
 
+HTTPS uses your system's trusted certificates, with a bundled Mozilla CA list as
+a fallback when no system CA file is available. Custom `SSL_CERT_FILE` and
+`SSL_CERT_DIR` settings are respected. Certificate and hostname verification
+remain enabled; a company proxy may require your administrator's trusted CA bundle.
+
+If **v1.2.0 or v1.3.0** reports `cannot reach GitHub` because of certificate
+discovery, supply your system CA bundle once to install the fix:
+
+```bash
+# Debian / Ubuntu (also use this path if it exists on your system)
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt pn update
+
+# Fedora / RHEL: use this instead if it is your system's CA bundle
+SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt pn update
+```
+
+After upgrading to **v1.3.1 or newer**, ordinary `pn update` commands discover
+these certificates automatically. The release archive and `install.sh` are also
+available for users whose older updater cannot connect.
+
 
 ## Keys
 

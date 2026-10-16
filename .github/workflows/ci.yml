@@ -30,9 +30,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install textual pyinstaller
-      - run: python -m PyInstaller --noconfirm --clean --onefile --collect-all textual --name pn-bin entry.py
+      - run: pip install -e '.[dev]'
+      - run: python -m PyInstaller --noconfirm --clean --onefile --collect-all textual --collect-data certifi --name pn-bin entry.py
       - run: ./dist/pn-bin --version
+      - name: Check packaged HTTPS on Ubuntu and Fedora
+        run: |
+          for image in ubuntu:22.04 fedora:latest; do
+            docker run --rm -v "$PWD/dist/pn-bin:/pn-bin:ro" "$image" /pn-bin update --check
+          done
       - run: bash scripts/package-release.sh
       - uses: actions/upload-artifact@v4
         with:

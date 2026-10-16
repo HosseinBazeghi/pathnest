@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
+import ssl
 import stat
 import subprocess
 import sys
@@ -24,7 +25,7 @@ import tarfile
 import tempfile
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from . import __version__
 
@@ -36,6 +37,13 @@ BUNDLE = "pathnest-linux-x86_64"
 ASSET = BUNDLE + ".tar.gz"
 MAX_DOWNLOAD = 128 * 1024 * 1024
 TIMEOUT = 30
+SYSTEM_CA_FILES = (
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian / Ubuntu
+    "/etc/pki/tls/certs/ca-bundle.crt",  # Fedora / RHEL
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/ca-bundle.pem",  # openSUSE
+    "/etc/ssl/cert.pem",  # Arch / Alpine
+)
 
 
 class UpdateError(Exception):
@@ -60,6 +68,41 @@ class _HTTPSRedirects(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _tls_context() -> ssl.SSLContext:
+    """Use explicit CA settings, system trust, or the bundled Mozilla roots.
+
+    Frozen Python may retain OpenSSL certificate paths from the build machine.
+    Discover Linux CA bundles explicitly, without changing global SSL settings.
+    """
+    cafile = os.environ.get("SSL_CERT_FILE")
+    capaths = [path for path in os.environ.get("SSL_CERT_DIR", "").split(os.pathsep) if path]
+    try:
+        if cafile or capaths:
+            # Explicit trust settings must not silently fall back to other roots.
+            for path in capaths:
+                if not Path(path).is_dir():
+                    raise UpdateError(f"SSL_CERT_DIR is not a directory: {path}")
+            context = ssl.create_default_context(cafile=cafile, capath=capaths[0] if capaths else None)
+            for path in capaths[1:]:
+                context.load_verify_locations(capath=path)
+            return context
+        context = ssl.create_default_context()
+        for path in SYSTEM_CA_FILES:
+            if Path(path).is_file():
+                context.load_verify_locations(cafile=path)
+                return context
+        # Hashed default CA directories load lazily. Keep them available while
+        # adding portable roots if no certificates were loaded from a CA file.
+        if not context.get_ca_certs():
+            import certifi
+
+            context.load_verify_locations(cafile=certifi.where())
+        return context
+    except (OSError, ValueError) as exc:
+        raise UpdateError("cannot load HTTPS certificates; check SSL_CERT_FILE / SSL_CERT_DIR "
+                          "or repair your system CA certificates") from exc
+
+
 def _fetch(url: str, destination: Path, limit: int) -> str:
     """Stream a bounded HTTPS response to disk and return its SHA-256 digest."""
     request = Request(url, headers={"User-Agent": f"PathNest/{__version__}",
@@ -67,7 +110,7 @@ def _fetch(url: str, destination: Path, limit: int) -> str:
     digest = hashlib.sha256()
     total = 0
     try:
-        with build_opener(_HTTPSRedirects()).open(request, timeout=TIMEOUT) as response:
+        with build_opener(_HTTPSRedirects(), HTTPSHandler(context=_tls_context())).open(request, timeout=TIMEOUT) as response:
             with destination.open("wb") as output:
                 while True:
                     chunk = response.read(64 * 1024)
@@ -86,7 +129,13 @@ def _fetch(url: str, destination: Path, limit: int) -> str:
         if exc.code in (403, 429):
             raise UpdateError("GitHub denied the request or its rate limit was reached; try again later") from exc
         raise UpdateError(f"GitHub download failed (HTTP {exc.code})") from exc
-    except (URLError, TimeoutError, HTTPException) as exc:
+    except (URLError, ssl.SSLError, TimeoutError, HTTPException) as exc:
+        reason = exc.reason if isinstance(exc, URLError) else exc
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            raise UpdateError("HTTPS certificate verification failed; check your system clock and CA certificates. "
+                              "For a company proxy, configure SSL_CERT_FILE with its trusted CA bundle") from exc
+        if isinstance(reason, ssl.SSLError):
+            raise UpdateError("HTTPS connection failed; check your proxy and TLS configuration") from exc
         raise UpdateError("cannot reach GitHub; check your connection and try again") from exc
     return digest.hexdigest()
 
