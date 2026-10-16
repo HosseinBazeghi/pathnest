@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.0 — 2026-10-16
+
+- Jump with case-insensitive names and unique prefixes; prefer exact matches
+  and list ambiguous matches without navigating.
+- Add `pn edit GROUP NAME` to rename bookmarks, repair paths and move references
+  between existing groups in one atomic save.
+- Add `pn list --json` with optional group filtering for scripts and integrations.
+- Add `pn update --version X.Y.Z`, including check-only previews and explicit
+  downgrades to published stable releases. Default updates never downgrade.
+- Extend Bash/Zsh completion for the new commands and case-insensitive navigation.
+
 ## 1.2.0 — 2026-10-15
 
 - Add `pn update` and `pn update --check` for stable GitHub releases, with SHA-256

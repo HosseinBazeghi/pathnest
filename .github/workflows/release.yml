@@ -33,7 +33,14 @@ jobs:
           stage=$(mktemp -d)
           tar -xzf dist/pathnest-linux-x86_64.tar.gz -C "$stage"
           HOME="$stage/home" XDG_DATA_HOME="$stage/data" SHELL=/bin/bash bash "$stage/pathnest-linux-x86_64/install.sh"
-          HOME="$stage/home" PATH="$stage/home/.local/bin:$PATH" bash -c '. "$1"; pn add "$2"; pn go pathnest-linux-x86_64; test "$PWD" = "$2"' test "$stage/data/pathnest/pn.sh" "$stage/pathnest-linux-x86_64"
+          HOME="$stage/home" PATH="$stage/home/.local/bin:$PATH" bash -eu -s -- "$stage/data/pathnest/pn.sh" "$stage/pathnest-linux-x86_64" <<'SH'
+            . "$1"
+            pn add "$2"
+            pn edit Default pathnest-linux-x86_64 --name ReleaseSmoke
+            pn list Default --json | python -c 'import json, sys; assert json.load(sys.stdin)["groups"][0]["bookmarks"][0]["name"] == "ReleaseSmoke"'
+            pn go releasesm
+            test "$PWD" = "$2"
+          SH
       - name: Publish release bundle
         env:
           GH_TOKEN: ${{ github.token }}

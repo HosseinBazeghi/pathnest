@@ -30,7 +30,8 @@ from . import __version__
 
 REPOSITORY = "HosseinBazeghi/pathnest"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
-LATEST_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+API_RELEASES_URL = f"https://api.github.com/repos/{REPOSITORY}/releases"
+LATEST_URL = API_RELEASES_URL + "/latest"
 BUNDLE = "pathnest-linux-x86_64"
 ASSET = BUNDLE + ".tar.gz"
 MAX_DOWNLOAD = 128 * 1024 * 1024
@@ -42,7 +43,8 @@ class UpdateError(Exception):
 
 
 def version_tuple(value: str) -> tuple[int, int, int]:
-    if not isinstance(value, str) or not re.fullmatch(r"v?\d+\.\d+\.\d+", value):
+    if (not isinstance(value, str) or len(value) > 64
+            or not re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", value)):
         raise UpdateError("release version must have the form vMAJOR.MINOR.PATCH")
     return tuple(int(part) for part in value.lstrip("v").split("."))
 
@@ -61,7 +63,7 @@ class _HTTPSRedirects(HTTPRedirectHandler):
 def _fetch(url: str, destination: Path, limit: int) -> str:
     """Stream a bounded HTTPS response to disk and return its SHA-256 digest."""
     request = Request(url, headers={"User-Agent": f"PathNest/{__version__}",
-                                   "Accept": "application/vnd.github+json" if url == LATEST_URL else "application/octet-stream"})
+                                   "Accept": "application/vnd.github+json" if url.startswith(API_RELEASES_URL + "/") else "application/octet-stream"})
     digest = hashlib.sha256()
     total = 0
     try:
@@ -79,6 +81,8 @@ def _fetch(url: str, destination: Path, limit: int) -> str:
     except HTTPError as exc:
         if exc.code == 404 and url == LATEST_URL:
             raise UpdateError(f"no published release is available yet; see {RELEASES_URL}") from exc
+        if exc.code == 404 and url.startswith(API_RELEASES_URL + "/tags/"):
+            raise UpdateError(f"release {url.rsplit('/', 1)[-1]} is not published; see {RELEASES_URL}") from exc
         if exc.code in (403, 429):
             raise UpdateError("GitHub denied the request or its rate limit was reached; try again later") from exc
         raise UpdateError(f"GitHub download failed (HTTP {exc.code})") from exc
@@ -87,14 +91,17 @@ def _fetch(url: str, destination: Path, limit: int) -> str:
     return digest.hexdigest()
 
 
-def _latest(directory: Path) -> dict:
+def _release(directory: Path, version: str | None = None) -> dict:
+    tag = "v" + ".".join(map(str, version_tuple(version))) if version is not None else None
     target = directory / "release.json"
-    _fetch(LATEST_URL, target, 1024 * 1024)
+    _fetch(API_RELEASES_URL + "/tags/" + tag if tag else LATEST_URL, target, 1024 * 1024)
     try:
         release = json.loads(target.read_bytes())
         if not isinstance(release, dict) or release.get("draft") or release.get("prerelease"):
             raise ValueError
         version_tuple(release.get("tag_name"))
+        if tag is not None and release["tag_name"] != tag:
+            raise UpdateError("GitHub returned a different version than requested")
         if not isinstance(release.get("assets"), list):
             raise ValueError
     except (ValueError, UnicodeError, RecursionError) as exc:
@@ -143,12 +150,17 @@ def _update_lock(binary: Path):
         yield
 
 
-def _download_release(release: dict, directory: Path) -> tuple[Path, Path]:
+def _validate_assets(release: dict) -> None:
     tag = release["tag_name"]
     version_tuple(tag)
     names = [asset.get("name") for asset in release["assets"] if isinstance(asset, dict)]
     if names.count(ASSET) != 1 or names.count(ASSET + ".sha256") != 1:
         raise UpdateError(f"release {tag} has no complete {ASSET} bundle and checksum; see {RELEASES_URL}")
+
+
+def _download_release(release: dict, directory: Path) -> tuple[Path, Path]:
+    _validate_assets(release)
+    tag = release["tag_name"]
     # Construct URLs from our fixed repository, validated tag and fixed filenames.
     base = f"{RELEASES_URL}/download/{tag}/"
     checksum_file = directory / "checksum"
@@ -253,28 +265,40 @@ def _commit(binary: Path, shell: Path, target_binary: Path, target_shell: Path) 
                 shutil.rmtree(directory)
 
 
-def run_update(*, check: bool = False) -> int:
+def run_update(*, check: bool = False, version: str | None = None) -> int:
     try:
-        print("Checking the latest PathNest release on GitHub…", flush=True)
+        requested = "v" + ".".join(map(str, version_tuple(version))) if version is not None else None
+        print(f"Checking PathNest {requested} on GitHub…" if requested else
+              "Checking the latest PathNest release on GitHub…", flush=True)
         with tempfile.TemporaryDirectory(prefix="pathnest-update-") as temp:
             directory = Path(temp)
-            release = _latest(directory)
-            latest = release["tag_name"]
-            if version_tuple(latest) <= version_tuple(__version__):
-                print(f"PathNest {__version__} is up to date (latest release: {latest}).")
+            release = _release(directory, requested)
+            selected = release["tag_name"]
+            selected_version = version_tuple(selected)
+            current_version = version_tuple(__version__)
+            if requested is None and selected_version <= current_version:
+                print(f"PathNest {__version__} is up to date (latest release: {selected}).")
                 return 0
+            _validate_assets(release)
             if check:
-                print(f"Update available: {__version__} → {latest}. Run pn update to install it.")
+                if selected_version == current_version:
+                    print(f"PathNest {__version__} already matches requested release {selected}.")
+                else:
+                    action = "Downgrade" if selected_version < current_version else "Update"
+                    command = f"pn update --version {selected}" if requested else "pn update"
+                    print(f"{action} available: {__version__} → {selected}. Run {command} to install it.")
                 return 0
             _check_platform()
             target_binary, target_shell = _installation()
             with _update_lock(target_binary):
-                if version_tuple(_binary_version(target_binary)) >= version_tuple(latest):
-                    print("The installed binary is already up to date. Open a new terminal.")
+                installed_version = version_tuple(_binary_version(target_binary))
+                if installed_version == selected_version or (requested is None and installed_version > selected_version):
+                    print("The installed binary already matches or exceeds the requested update. Open a new terminal.")
                     return 0
-                print(f"Downloading {latest}…", flush=True)
+                action = "Downgrading to" if installed_version > selected_version else "Downloading"
+                print(f"{action} {selected}…", flush=True)
                 binary, shell = _download_release(release, directory)
-                if version_tuple(_binary_version(binary)) != version_tuple(latest):
+                if version_tuple(_binary_version(binary)) != selected_version:
                     raise UpdateError("downloaded binary version does not match the release tag")
                 for interpreter in ("bash", "zsh"):
                     command = shutil.which(interpreter)
@@ -282,7 +306,7 @@ def run_update(*, check: bool = False) -> int:
                         subprocess.run([command, "-n", str(shell)], check=True,
                                        capture_output=True, timeout=10, env=_child_environment())
                 _commit(binary, shell, target_binary, target_shell)
-        print(f"Updated PathNest to {latest}. Bookmarks are unchanged. Open a new terminal to load updated shell integration.")
+        print(f"Updated PathNest to {selected}. Bookmarks are unchanged. Open a new terminal to load updated shell integration.")
         return 0
     except (UpdateError, OSError, tarfile.TarError, EOFError, subprocess.SubprocessError) as exc:
         print(f"pn: update failed: {exc}", file=sys.stderr)

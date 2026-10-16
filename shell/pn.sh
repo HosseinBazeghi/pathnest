@@ -23,7 +23,7 @@ esac
 pn() {
     # These commands cannot navigate; avoid mktemp/rm and their subprocesses.
     case "${1:-}" in
-        add|group|remove|list|scan|update|--help|-h|--version)
+        add|edit|group|remove|list|scan|update|--help|-h|--version)
             PATHNEST_RESULT_FILE= PATHNEST_SHELL_FILE="$_PN_SHELL_FILE" pn-bin "$@"
             return $?
             ;;

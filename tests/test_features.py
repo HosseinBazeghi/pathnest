@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 from textual.widgets import Input, ListView
 
-from pathnest.app import PathNestApp, SearchScreen
+from pathnest.app import BookmarkFormScreen, PathNestApp, SearchScreen
 from pathnest.cli import main
 from pathnest.storage import Store, StorageError
 
@@ -115,9 +115,13 @@ def test_first_bookmark_and_cancel(tmp_path, monkeypatch):
         async with app.run_test() as pilot:
             assert app.focused.id == 'save-current'
             await pilot.press('enter', 'escape')
+            await app.workers.wait_for_complete()
             assert store.groups == []
-            await pilot.press('enter', 'enter')
+            await pilot.press('enter')
             await pilot.pause()
+            assert isinstance(app.screen, BookmarkFormScreen)
+            await pilot.press('enter')
+            await app.workers.wait_for_complete()
             assert store.bookmarks('Default')[0]['path'] == str(tmp_path)
             assert not app.query_one('#save-current').display
             assert app.focused.id == 'bookmarks'
@@ -245,3 +249,24 @@ def test_equivalent_search_results_keep_selection_and_widgets(tmp_path):
             await pilot.press('enter')
     asyncio.run(scenario())
     assert app.selected_path == str(tmp_path)
+
+
+@pytest.mark.parametrize('words,expected', [
+    (['pn', 'e'], ['edit']),
+    (['pn', 'edit', ''], ['Personal', 'Work']),
+    (['pn', 'edit', 'Work', ''], ['API service']),
+    (['pn', 'edit', '--group', 'Personal', 'Work', 'A'], ['API service']),
+    (['pn', 'edit', 'Work', 'API service', '--group', 'P'], ['Personal']),
+    (['pn', 'edit', 'Work', 'API service', '--p'], ['--path']),
+    (['pn', 'list', '--j'], ['--json']),
+    (['pn', 'update', '--v'], ['--version']),
+    (['pn', 'update', '--version', ''], []),
+    (['pn', 'go', 'api'], ['API service']),
+])
+def test_completion_for_new_commands(tmp_path, capsys, words, expected):
+    from pathnest.completion import complete
+    store = Store(tmp_path / 'db.json')
+    store.add_bookmark('Work', 'API service', str(tmp_path), create_group=True)
+    store.add_bookmark('Personal', 'Another', str(tmp_path), create_group=True)
+    assert complete(store.path, words) == 0
+    assert capsys.readouterr().out.splitlines() == expected

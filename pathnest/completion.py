@@ -25,7 +25,7 @@ def complete(config: Path, words: list[str]) -> int:
     for word in words[:-1]:
         if skip:
             skip = False
-        elif word in ("--config", "--group", "-g", "--name", "-n"):
+        elif word in ("--config", "--group", "-g", "--name", "-n", "--path", "--version"):
             skip = True
         elif not word.startswith("-"):
             command_words.append(word)
@@ -38,40 +38,46 @@ def complete(config: Path, words: list[str]) -> int:
             groups = _read_groups(config)
         return groups
 
-    if previous in ("--config", "--name", "-n"):
+    if previous in ("--config", "--name", "-n", "--path", "--version"):
         candidates = []
     elif previous in ("--group", "-g"):
         candidates = [g["name"] for g in saved_groups()]
     elif prefix.startswith("-"):
         candidates = ["--config", "--help"]
-        if command in ("go", "add", "scan"):
+        if command in ("go", "add", "scan", "edit"):
             candidates += ["--group"]
         if command == "update":
-            candidates += ["--check"]
-        if command == "add":
+            candidates += ["--check", "--version"]
+        if command in ("add", "edit"):
             candidates += ["--name"]
+        if command == "edit":
+            candidates += ["--path"]
+        if command == "list":
+            candidates += ["--json"]
         if command in ("scan", "remove"):
             candidates += ["--yes"]
     elif not command:
-        candidates = ["add", "go", "group", "list", "remove", "scan", "update"]
+        candidates = ["add", "edit", "go", "group", "list", "remove", "scan", "update"]
     elif command == "group" and len(command_words) == 1:
         candidates = ["add", "rename", "remove"]
-    elif command == "go" or (command == "remove" and len(command_words) == 2):
-        group = command_words[1] if command == "remove" else None
-        for index, word in enumerate(words[:-1]):
-            if word in ("--group", "-g") and index + 1 < len(words) - 1:
-                group = words[index + 1]
-            elif word.startswith("--group="):
-                group = word.split("=", 1)[1]
+    elif command == "go" or (command in ("remove", "edit") and len(command_words) == 2):
+        group = command_words[1] if command in ("remove", "edit") else None
+        if command == "go":
+            for index, word in enumerate(words[:-1]):
+                if word in ("--group", "-g") and index + 1 < len(words) - 1:
+                    group = words[index + 1]
+                elif word.startswith("--group="):
+                    group = word.split("=", 1)[1]
         candidates = [bm["name"] for g in saved_groups() if group is None or g["name"] == group
                       for bm in g["bookmarks"]]
-    elif command in ("list", "remove") or (command == "group" and len(command_words) == 2
+    elif command in ("list", "remove", "edit") or (command == "group" and len(command_words) == 2
                                             and command_words[1] in ("rename", "remove")):
         candidates = [g["name"] for g in saved_groups()]
     else:
         candidates = []
     for candidate in sorted(set(candidates)):
-        if candidate.startswith(prefix) and not any(c in candidate for c in "\n\r\t"):
+        matches = candidate.casefold().startswith(prefix.casefold()) if command == "go" else candidate.startswith(prefix)
+        if matches and not any(c in candidate for c in "\n\r\t"):
             print(candidate)
     return 0
 

@@ -47,7 +47,7 @@ def release_setup(tmp_path, monkeypatch):
     state = {'archive': archive_bytes(), 'metadata': metadata, 'requests': []}
     def fetch(url, destination, limit):
         state['requests'].append(url)
-        if url == update.LATEST_URL:
+        if url.startswith(update.API_RELEASES_URL + "/"):
             data = json.dumps(state['metadata']).encode()
         elif url.endswith('.sha256'):
             checksum = state.get('checksum', hashlib.sha256(state['archive']).hexdigest())
@@ -258,3 +258,87 @@ def test_platform_rejects_incompatible_prebuilt_bundle(monkeypatch, system, mach
     monkeypatch.setattr(update.platform, 'libc_ver', lambda: libc)
     with pytest.raises(update.UpdateError, match='build from source'):
         update._check_platform()
+
+
+@pytest.mark.parametrize('version', ['1.3.0', 'v1.3.0'])
+def test_specific_version_uses_tag_endpoint_and_installs(release_setup, version):
+    state, binary, _ = release_setup
+    assert main(['update', '--version', version]) == 0
+    assert state['requests'][0] == update.API_RELEASES_URL + '/tags/v1.3.0'
+    assert update.LATEST_URL not in state['requests']
+    assert update._binary_version(binary) == '1.3.0'
+
+
+def test_explicit_version_can_downgrade_without_changing_bookmarks(release_setup, tmp_path, monkeypatch, capsys):
+    state, binary, wrapper = release_setup
+    executable(binary, '1.4.0')
+    monkeypatch.setattr(update, '__version__', '1.4.0')
+    config = tmp_path / 'db.json'
+    config.write_text('{"groups": []}')
+    assert main(['update', '--version', '1.3.0', '--check', '--config', str(config)]) == 0
+    assert 'Downgrade available' in capsys.readouterr().out
+    assert update._binary_version(binary) == '1.4.0'
+    assert wrapper.read_text() == '# old wrapper\n'
+    assert state['requests'] == [update.API_RELEASES_URL + '/tags/v1.3.0']
+    assert main(['update', '--version', '1.3.0', '--config', str(config)]) == 0
+    assert update._binary_version(binary) == '1.3.0'
+    assert config.read_text() == '{"groups": []}'
+
+
+def test_specific_version_checks_installed_binary_under_lock(release_setup, monkeypatch):
+    state, binary, _ = release_setup
+    # The running process may be stale after another updater has replaced its binary.
+    monkeypatch.setattr(update, '__version__', '1.3.0')
+    assert update.run_update(version='1.3.0') == 0
+    assert update._binary_version(binary) == '1.3.0'
+    assert len(state['requests']) == 3
+
+
+def test_specific_version_already_installed_does_not_download(release_setup):
+    state, binary, _ = release_setup
+    executable(binary, '1.3.0')
+    assert update.run_update(version='1.3.0') == 0
+    assert state['requests'] == [update.API_RELEASES_URL + '/tags/v1.3.0']
+
+
+def test_specific_version_check_does_not_require_installation(release_setup, monkeypatch, capsys):
+    state, _, _ = release_setup
+    monkeypatch.setattr(update, '_installation', lambda: pytest.fail('must not inspect installation'))
+    monkeypatch.setattr(update, '__version__', '1.3.0')
+    assert main(['update', '--version', 'v1.3.0', '--check']) == 0
+    assert 'already matches' in capsys.readouterr().out
+    assert state['requests'] == [update.API_RELEASES_URL + '/tags/v1.3.0']
+
+
+@pytest.mark.parametrize('version', ['main', '../1.3.0', '1.3', '1.3.0-beta', '01.3.0', '１.3.0', ''])
+def test_bad_requested_version_fails_before_network(release_setup, version):
+    state, binary, _ = release_setup
+    assert main(['update', '--version', version]) == 1
+    assert state['requests'] == []
+    assert update._binary_version(binary) == '1.0.0'
+
+
+@pytest.mark.parametrize('change', ['tag', 'draft', 'prerelease', 'assets'])
+def test_requested_release_rejects_wrong_or_unusable_metadata(release_setup, change):
+    state, binary, wrapper = release_setup
+    if change == 'tag':
+        state['metadata']['tag_name'] = 'v1.4.0'
+    elif change == 'assets':
+        state['metadata']['assets'] = []
+    else:
+        state['metadata'][change] = True
+    before = (binary.read_bytes(), wrapper.read_bytes())
+    assert main(['update', '--version', '1.3.0', '--check']) == 1
+    assert (binary.read_bytes(), wrapper.read_bytes()) == before
+    assert len(state['requests']) == 1
+
+
+def test_named_release_not_found_is_actionable(tmp_path, monkeypatch):
+    url = update.API_RELEASES_URL + '/tags/v9.9.9'
+    class Opener:
+        def open(self, request, **kwargs):
+            assert request.get_header('Accept') == 'application/vnd.github+json'
+            raise HTTPError(url, 404, 'not found', {}, io.BytesIO())
+    monkeypatch.setattr(update, 'build_opener', lambda *args: Opener())
+    with pytest.raises(update.UpdateError, match='release v9.9.9 is not published'):
+        update._release(tmp_path, '9.9.9')

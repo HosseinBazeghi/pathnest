@@ -60,6 +60,8 @@ pn
 ```bash
 pn update --check
 pn update
+pn update --version 1.3.0 --check
+pn update --version 1.3.0
 ```
 
 `pn update` downloads the latest **published stable release** from this project's
@@ -67,6 +69,13 @@ GitHub Releases page. It verifies the archive's SHA-256 checksum and runs the ne
 binary's version check before replacing the installed binary and shell wrapper.
 Bookmarks and shell configuration files are untouched. Open a new terminal after
 updating to load the new wrapper and completion functions.
+
+Use `--version X.Y.Z` (or `--version vX.Y.Z`) to choose a specific published
+stable release. Combine it with `--check` to preview the change. Explicit version
+selection permits downgrades; plain `pn update` never downgrades. Selecting the
+installed version does nothing. The selected release must include the Linux
+bundle and checksum; draft releases, prereleases and Git branches are unsupported.
+Version selection requires PathNest 1.3.0+: on 1.2.0, run `pn update` first.
 
 Automatic installation supports standalone installations in `~/.local/bin` on
 Linux x86_64 with glibc 2.35+. Source/virtual-environment installations can check
@@ -104,21 +113,40 @@ New bookmarks default to the current directory. Paths are validated, `~` is expa
 
 ## CLI
 
-Everything also works without the TUI:
+Manage bookmarks and navigate without the TUI:
 
 ```bash
 pn add                                  # bookmark the current directory
 pn add --group Research --name Thesis ~/university/thesis
 pn go thesis --group Research           # choose a bookmark in a specific group
-pn go thesis                            # jump straight there, no TUI (fuzzy: "pn go thesi" asks)
-pn group add Research
+pn go thes                              # jump using a unique prefix, ignoring case
+pn edit Research Thesis --name Paper
+pn edit Research Paper --path ~/university/new-thesis
+pn group add Personal
+pn edit Research Paper --group Personal # destination group must already exist
+pn group add Work
 pn group rename Research Science        # bookmarks are kept
 pn list
+pn list Personal --json                  # structured output for scripts
 pn update                               # install the latest stable GitHub release
 pn update --check                       # check without changing the installation
+pn update --version 1.3.0                # choose a specific stable release
 pn scan ~/Projects --group Work          # preview immediate, non-hidden subdirectories
 pn scan ~/Projects --group Work --yes    # add all candidates without a prompt
 ```
+
+`pn go` first prefers an exact name, then a case-insensitive exact match, then
+a case-insensitive prefix. A unique match jumps immediately, including in
+scripts. Ambiguous matches are listed; choose a full name or add `--group`.
+Other typos still offer fuzzy suggestions and require confirmation before jumping.
+
+`pn edit GROUP NAME` accepts `--name`, `--path` and `--group`, separately or
+together. It requires exact current group/bookmark names. All changes are
+validated and saved together; it never renames or moves the actual directory.
+
+`pn list --json` emits the same `{"groups": [...]}` structure as the bookmark
+file, optionally restricted to one group. Empty databases produce `{"groups": []}`.
+Diagnostics go to stderr so stdout remains valid JSON on success.
 
 Scanning skips names and paths already saved in the destination group, plus
 empty or duplicate names after trimming whitespace. At the

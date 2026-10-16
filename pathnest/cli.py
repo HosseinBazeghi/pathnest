@@ -48,7 +48,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_go = sub.add_parser("go", parents=[common], help="jump to a bookmark by (partial) name")
     p_go.add_argument("-g", "--group", help="limit matches to this group")
-    p_go.add_argument("name", metavar="NAME", help="bookmark name; a partial name offers close matches")
+    p_go.add_argument("name", metavar="NAME", help="bookmark name or unique prefix (case-insensitive fallback)")
+
+    p_edit = sub.add_parser("edit", parents=[common], help="rename, relocate or move a bookmark to another group")
+    p_edit.add_argument("group", metavar="GROUP", help="current group")
+    p_edit.add_argument("name", metavar="NAME", help="current bookmark name")
+    p_edit.add_argument("-n", "--name", dest="new_name", metavar="NAME", help="new bookmark name")
+    p_edit.add_argument("--path", dest="new_path", metavar="DIR", help="new directory path")
+    p_edit.add_argument("-g", "--group", dest="new_group", metavar="GROUP", help="destination group (must exist)")
 
     p_rm = sub.add_parser("remove", parents=[common], help="remove a bookmark (never deletes any files)")
     p_rm.add_argument("group", metavar="GROUP", help="group containing the bookmark")
@@ -71,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_list = sub.add_parser("list", parents=[common], help="list groups and bookmarks")
     p_list.add_argument("group", nargs="?", metavar="GROUP", help="show only this group")
+    p_list.add_argument("--json", action="store_true", help="output JSON for scripts")
 
     p_scan = sub.add_parser("scan", parents=[common], help="preview and bookmark immediate subdirectories")
     p_scan.add_argument("path", nargs="?", default=".")
@@ -79,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_update = sub.add_parser("update", parents=[common], help="install the latest stable GitHub release")
     p_update.add_argument("--check", action="store_true", help="check for a new release without installing")
+    p_update.add_argument("--version", metavar="VERSION", help="select a published stable version, e.g. 1.3.0 (allows downgrades)")
 
     # Shell adapters pass complete command words after --, including the current prefix.
     p_complete = sub.add_parser("_complete", parents=[common])
@@ -176,6 +185,9 @@ def _jump(path: str) -> int:
 
 def cmd_go(store, args: argparse.Namespace) -> int:
     name = args.name.strip()
+    if not name:
+        print("pn: bookmark name must not be empty", file=sys.stderr)
+        return 1
     groups = store.groups
     if args.group is not None:
         groups = [{"name": args.group, "bookmarks": store.bookmarks(args.group)}]
@@ -194,19 +206,36 @@ def cmd_go(store, args: argparse.Namespace) -> int:
         print("Use pn go NAME --group GROUP to choose one.", file=sys.stderr)
         return 1
 
+    folded = {}
+    for bookmark_name, entries in by_name.items():
+        folded.setdefault(bookmark_name.casefold(), []).extend(entries)
+    query = name.casefold()
+    matches = folded.get(query, [])
+    if not matches:
+        matches = [entry for key, entries in folded.items() if key.startswith(query) for entry in entries]
+    if len(matches) == 1:
+        return _jump(matches[0][1]["path"])
+    if matches:
+        print(f'pn: "{name}" matches more than one bookmark:', file=sys.stderr)
+        for group, bookmark in matches:
+            print(f"  {bookmark['name']}  ({group}): {bookmark['path']}", file=sys.stderr)
+        print("Use the full name and --group GROUP to choose one.", file=sys.stderr)
+        return 1
+
     import difflib
 
-    close = difflib.get_close_matches(name, sorted(by_name), n=3, cutoff=0.6)
+    close = difflib.get_close_matches(query, sorted(folded), n=3, cutoff=0.6)
     if not close:
         print(f'pn: no bookmark matching "{name}"', file=sys.stderr)
         return 1
-    candidates = by_name[close[0]]
+    candidates = folded[close[0]]
     if len(close) == 1 and len(candidates) == 1:
+        suggested = candidates[0][1]["name"]
         if not sys.stdin.isatty():
-            print(f'pn: not a terminal; use the exact name "{close[0]}"', file=sys.stderr)
+            print(f'pn: not a terminal; use the exact name "{suggested}"', file=sys.stderr)
             return 1
         try:
-            answer = input(f'Did you mean "{close[0]}"? [y/N] ')
+            answer = input(f'Did you mean "{suggested}"? [y/N] ')
         except (EOFError, KeyboardInterrupt):
             print()
             return 1
@@ -216,9 +245,19 @@ def cmd_go(store, args: argparse.Namespace) -> int:
 
     print("pn: no exact match. Did you mean:", file=sys.stderr)
     for close_name in close:
-        for g, bm in by_name[close_name]:
+        for g, bm in folded[close_name]:
             print(f"  {bm['name']}  ({g}): {bm['path']}", file=sys.stderr)
     return 1
+
+
+def cmd_edit(store, args: argparse.Namespace) -> int:
+    entry = store.update_bookmark(
+        args.group, args.name, new_name=args.new_name,
+        new_group=args.new_group, new_path=args.new_path,
+    )
+    group = args.new_group.strip() if args.new_group is not None else args.group
+    print(f'Updated "{entry["name"]}" -> {entry["path"]} (group "{group}")')
+    return 0
 
 
 def cmd_remove(store, args: argparse.Namespace) -> int:
@@ -261,6 +300,13 @@ def cmd_group(store, args: argparse.Namespace) -> int:
 
 
 def cmd_list(store, args: argparse.Namespace) -> int:
+    if args.json:
+        import json
+
+        groups = ([{"name": args.group, "bookmarks": store.bookmarks(args.group)}]
+                  if args.group is not None else store.groups)
+        print(json.dumps({"groups": groups}, indent=2, ensure_ascii=False))
+        return 0
     if args.group:
         bookmarks = store.bookmarks(args.group)
         print(f"{args.group}:")
@@ -344,9 +390,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "edit" and all(value is None for value in (args.new_name, args.new_path, args.new_group)):
+        parser.error("pn edit requires --name, --path or --group")
     if args.command == "update":
         from .update import run_update
-        return run_update(check=args.check)
+        return run_update(check=args.check, version=args.version)
 
     from .config import ConfigError, resolve_config_path
 
@@ -373,6 +421,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     handlers = {
         "add": cmd_add,
         "go": cmd_go,
+        "edit": cmd_edit,
         "remove": cmd_remove,
         "group": cmd_group,
         "list": cmd_list,
