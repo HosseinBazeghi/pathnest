@@ -404,8 +404,10 @@ def test_json_listing_empty_and_unknown_group(tmp_path, capsys):
     assert 'unknown group' in captured.err
 
 
-def test_json_listing_escapes_special_characters(tmp_path, capsys):
+@pytest.mark.parametrize('name', ['quote" and\nnewline', 'Unix byte \udcff'])
+def test_json_listing_escapes_special_characters(tmp_path, capsys, name):
     store = Store(tmp_path / 'db.json')
-    store.add_bookmark('研究', 'quote" and\nnewline', str(tmp_path), create_group=True)
+    store.add_bookmark('研究', name, str(tmp_path), create_group=True)
     assert main(['list', '--json', '--config', str(store.path)]) == 0
-    assert json.loads(capsys.readouterr().out) == {'groups': store.groups}
+    output = capsys.readouterr().out.encode('utf-8')
+    assert json.loads(output) == {'groups': store.groups}

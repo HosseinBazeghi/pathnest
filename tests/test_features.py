@@ -102,7 +102,7 @@ def test_native_completion_preserves_spaces(tmp_path, shell):
     if shell == 'bash':
         script = '. "$1"; COMP_WORDS=(pn go A); COMP_CWORD=2; _pn_complete; test "${#COMPREPLY[@]}" = 1 && test "${COMPREPLY[0]}" = "API service"'
     else:
-        script = 'compdef() { :; }; . "$1"; words=(pn go A); CURRENT=3; compadd() { shift; test "$#" = 1 && test "$1" = "API service"; }; _pn_complete'
+        script = 'compdef() { :; }; . "$1"; words=(pn go api); CURRENT=3; compadd() { test "$1" = -U || return 1; shift 2; test "$#" = 1 && test "$1" = "API service"; }; _pn_complete'
     result = subprocess.run([shell, '-c', script, 'test', str(root / 'shell/pn.sh')], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 

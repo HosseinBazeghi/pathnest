@@ -305,7 +305,9 @@ def cmd_list(store, args: argparse.Namespace) -> int:
 
         groups = ([{"name": args.group, "bookmarks": store.bookmarks(args.group)}]
                   if args.group is not None else store.groups)
-        print(json.dumps({"groups": groups}, indent=2, ensure_ascii=False))
+        # Escape non-ASCII code points, including surrogate-escaped Unix paths,
+        # so redirected output remains valid UTF-8 on every terminal encoding.
+        print(json.dumps({"groups": groups}, indent=2))
         return 0
     if args.group:
         bookmarks = store.bookmarks(args.group)

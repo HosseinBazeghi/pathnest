@@ -67,7 +67,8 @@ elif [ -n "${ZSH_VERSION:-}" ]; then
         local -a candidates
         candidates=("${(@f)$(pn-bin _complete -- "${(@)words[1,CURRENT]}" 2>/dev/null)}")
         if (( ${#candidates} )) && [[ -n ${candidates[1]} ]]; then
-            compadd -- "${candidates[@]}"
+            # Python already filtered these, including case-insensitive names.
+            compadd -U -- "${candidates[@]}"
         else
             _files
         fi
